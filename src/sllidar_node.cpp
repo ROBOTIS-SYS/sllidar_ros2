@@ -44,7 +44,7 @@
 #define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
 #endif
 
-#define DEG2RAD(x) ((x)*M_PI/180.)
+#define DEG2RAD(x) ((x) * M_PI / 180.)
 
 #define ROS2VERSION "1.0.1"
 
@@ -54,426 +54,514 @@ bool need_exit = false;
 
 class SLlidarNode : public rclcpp::Node
 {
-  public:
-    SLlidarNode()
-    : Node("sllidar_node")
-    {
+public:
+  SLlidarNode()
+  : Node("sllidar_node")
+  {
 
-      scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::KeepLast(10)));
-      
+    scan_pub =
+      this->create_publisher<sensor_msgs::msg::LaserScan>(
+      "scan",
+      rclcpp::QoS(rclcpp::KeepLast(10)));
+
+  }
+
+private:
+  void init_param()
+  {
+    this->declare_parameter("channel_type");
+    this->declare_parameter("tcp_ip");
+    this->declare_parameter("tcp_port");
+    this->declare_parameter("udp_ip");
+    this->declare_parameter("udp_port");
+    this->declare_parameter("serial_port");
+    this->declare_parameter("serial_baudrate");
+    this->declare_parameter("frame_id");
+    this->declare_parameter("inverted");
+    this->declare_parameter("angle_compensate");
+    this->declare_parameter("scan_mode");
+    this->declare_parameter("scan_frequency");
+    this->declare_parameter("angle_min");
+    this->declare_parameter("angle_max");
+
+    this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
+    this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7");
+    this->get_parameter_or<int>("tcp_port", tcp_port, 20108);
+    this->get_parameter_or<std::string>("udp_ip", udp_ip, "192.168.11.2");
+    this->get_parameter_or<int>("udp_port", udp_port, 8089);
+    this->get_parameter_or<std::string>("serial_port", serial_port, "/dev/ttyUSB0");
+    this->get_parameter_or<int>("serial_baudrate", serial_baudrate, 1000000 /*256000*/);   //ros run for A1 A2, change to 256000 if A3
+    this->get_parameter_or<std::string>("frame_id", frame_id, "laser_frame");
+    this->get_parameter_or<bool>("inverted", inverted, false);
+    this->get_parameter_or<bool>("angle_compensate", angle_compensate, false);
+    this->get_parameter_or<std::string>("scan_mode", scan_mode, std::string());
+    if (channel_type == "udp") {
+      this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
+    } else {
+      this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
+    }
+    this->get_parameter_or<float>("angle_min", angle_min, 0.0);
+    this->get_parameter_or<float>("angle_max", angle_max, 0.0);
+  }
+
+  bool getSLLIDARDeviceInfo(ILidarDriver * drv)
+  {
+    sl_result op_result;
+    sl_lidar_response_device_info_t devinfo;
+
+    op_result = drv->getDeviceInfo(devinfo);
+    if (SL_IS_FAIL(op_result)) {
+      if (op_result == SL_RESULT_OPERATION_TIMEOUT) {
+        RCLCPP_ERROR(
+          this->get_logger(),
+          "Error, operation time out. SL_RESULT_OPERATION_TIMEOUT! ");
+      } else {
+        RCLCPP_ERROR(this->get_logger(), "Error, unexpected error, code: %x", op_result);
+      }
+      return false;
     }
 
-  private:    
-    void init_param()
-    {
-        this->declare_parameter("channel_type");
-        this->declare_parameter("tcp_ip");
-        this->declare_parameter("tcp_port");
-        this->declare_parameter("udp_ip");
-        this->declare_parameter("udp_port");
-        this->declare_parameter("serial_port");
-        this->declare_parameter("serial_baudrate");
-        this->declare_parameter("frame_id");
-        this->declare_parameter("inverted");
-        this->declare_parameter("angle_compensate");
-        this->declare_parameter("scan_mode");
-        this->declare_parameter("scan_frequency");
+    // print out the device serial number, firmware and hardware version number..
+    char sn_str[37] = {'\0'};
+    for (int pos = 0; pos < 16; ++pos) {
+      sprintf(sn_str + (pos * 2), "%02X", devinfo.serialnum[pos]);
+    }
+    RCLCPP_INFO(this->get_logger(), "SLLidar S/N: %s", sn_str);
+    RCLCPP_INFO(
+      this->get_logger(), "Firmware Ver: %d.%02d", devinfo.firmware_version >> 8,
+      devinfo.firmware_version & 0xFF);
+    RCLCPP_INFO(this->get_logger(), "Hardware Rev: %d", (int)devinfo.hardware_version);
+    return true;
+  }
 
-        this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
-        this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7"); 
-        this->get_parameter_or<int>("tcp_port", tcp_port, 20108);
-        this->get_parameter_or<std::string>("udp_ip", udp_ip, "192.168.11.2"); 
-        this->get_parameter_or<int>("udp_port", udp_port, 8089);
-        this->get_parameter_or<std::string>("serial_port", serial_port, "/dev/ttyUSB0"); 
-        this->get_parameter_or<int>("serial_baudrate", serial_baudrate, 1000000/*256000*/);//ros run for A1 A2, change to 256000 if A3
-        this->get_parameter_or<std::string>("frame_id", frame_id, "laser_frame");
-        this->get_parameter_or<bool>("inverted", inverted, false);
-        this->get_parameter_or<bool>("angle_compensate", angle_compensate, false);
-        this->get_parameter_or<std::string>("scan_mode", scan_mode, std::string());
-        if(channel_type == "udp")
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
-        else
-            this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
+  bool checkSLLIDARHealth(ILidarDriver * drv)
+  {
+    sl_result op_result;
+    sl_lidar_response_device_health_t healthinfo;
+    op_result = drv->getHealth(healthinfo);
+    if (SL_IS_OK(op_result)) {
+      RCLCPP_INFO(this->get_logger(), "SLLidar health status : %d", healthinfo.status);
+      switch (healthinfo.status) {
+        case SL_LIDAR_STATUS_OK:
+          RCLCPP_INFO(this->get_logger(), "SLLidar health status : OK.");
+          return true;
+        case SL_LIDAR_STATUS_WARNING:
+          RCLCPP_INFO(this->get_logger(), "SLLidar health status : Warning.");
+          return true;
+        case SL_LIDAR_STATUS_ERROR:
+          RCLCPP_ERROR(
+            this->get_logger(),
+            "Error, SLLidar internal error detected. Please reboot the device to retry.");
+          return false;
+      }
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Error, cannot retrieve SLLidar health code: %x", op_result);
+      return false;
+    }
+  }
+
+  bool stop_motor(
+    const std::shared_ptr<std_srvs::srv::Empty::Request> req,
+    std::shared_ptr<std_srvs::srv::Empty::Response> res)
+  {
+    (void)req;
+    (void)res;
+
+    if (!drv) {
+      return false;
     }
 
-    bool getSLLIDARDeviceInfo(ILidarDriver * drv)
-    {
-        sl_result     op_result;
-        sl_lidar_response_device_info_t devinfo;
+    RCLCPP_DEBUG(this->get_logger(), "Stop motor");
+    drv->setMotorSpeed(0);
+    return true;
+  }
 
-        op_result = drv->getDeviceInfo(devinfo);
-        if (SL_IS_FAIL(op_result)) {
-            if (op_result == SL_RESULT_OPERATION_TIMEOUT) {
-                RCLCPP_ERROR(this->get_logger(),"Error, operation time out. SL_RESULT_OPERATION_TIMEOUT! ");
-            } else {
-                RCLCPP_ERROR(this->get_logger(),"Error, unexpected error, code: %x",op_result);
-            }
-            return false;
-        }
+  bool start_motor(
+    const std::shared_ptr<std_srvs::srv::Empty::Request> req,
+    std::shared_ptr<std_srvs::srv::Empty::Response> res)
+  {
+    (void)req;
+    (void)res;
 
-        // print out the device serial number, firmware and hardware version number..
-        char sn_str[37] = {'\0'}; 
-        for (int pos = 0; pos < 16 ;++pos) {
-            sprintf(sn_str + (pos * 2),"%02X", devinfo.serialnum[pos]);
-        }
-        RCLCPP_INFO(this->get_logger(),"SLLidar S/N: %s",sn_str);
-        RCLCPP_INFO(this->get_logger(),"Firmware Ver: %d.%02d",devinfo.firmware_version>>8, devinfo.firmware_version & 0xFF);
-        RCLCPP_INFO(this->get_logger(),"Hardware Rev: %d",(int)devinfo.hardware_version);
-        return true;
+    if (!drv) {
+      return false;
+    }
+    if (drv->isConnected()) {
+      RCLCPP_DEBUG(this->get_logger(), "Start motor");
+      sl_result ans = drv->setMotorSpeed();
+      if (SL_IS_FAIL(ans)) {
+        RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
+        return false;
+      }
+
+      ans = drv->startScan(0, 1);
+      if (SL_IS_FAIL(ans)) {
+        RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
+      }
+    } else {
+      RCLCPP_INFO(this->get_logger(), "lost connection");
+      return false;
     }
 
-    bool checkSLLIDARHealth(ILidarDriver * drv)
-    {
-        sl_result     op_result;
-        sl_lidar_response_device_health_t healthinfo;
-        op_result = drv->getHealth(healthinfo);
-        if (SL_IS_OK(op_result)) { 
-            RCLCPP_INFO(this->get_logger(),"SLLidar health status : %d", healthinfo.status);
-            switch (healthinfo.status) {
-                case SL_LIDAR_STATUS_OK:
-                    RCLCPP_INFO(this->get_logger(),"SLLidar health status : OK.");
-                    return true;
-                case SL_LIDAR_STATUS_WARNING:
-                    RCLCPP_INFO(this->get_logger(),"SLLidar health status : Warning.");
-                    return true;
-                case SL_LIDAR_STATUS_ERROR:
-                    RCLCPP_ERROR(this->get_logger(),"Error, SLLidar internal error detected. Please reboot the device to retry.");
-                    return false;
-            }
-        } else {
-            RCLCPP_ERROR(this->get_logger(),"Error, cannot retrieve SLLidar health code: %x", op_result);
-            return false;
-        }
+    return true;
+  }
+
+  static float getAngle(const sl_lidar_response_measurement_node_hq_t & node)
+  {
+    return node.angle_z_q14 * 90.f / 16384.f;
+  }
+
+  void publish_scan(
+    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr & pub,
+    sl_lidar_response_measurement_node_hq_t * nodes,
+    size_t node_count, rclcpp::Time start,
+    double scan_time, bool inverted,
+    float data_angle_min, float data_angle_max,
+    float max_distance,
+    std::string frame_id, float angle_min, float angle_max)
+  {
+    static int scan_count = 0;
+    auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
+
+    scan_msg->header.stamp = start;
+    scan_msg->header.frame_id = frame_id;
+    scan_count++;
+
+    bool reversed = (data_angle_max > data_angle_min);
+    double msg_angle_min, msg_angle_max;
+    if (reversed) {
+      msg_angle_min = M_PI - data_angle_max;
+      msg_angle_max = M_PI - data_angle_min;
+    } else {
+      msg_angle_min = M_PI - data_angle_min;
+      msg_angle_max = M_PI - data_angle_max;
+    }
+    scan_msg->angle_increment = (msg_angle_max - msg_angle_min) /
+      (double)(node_count - 1);
+
+    scan_msg->scan_time = scan_time;
+    scan_msg->time_increment = scan_time / (double)(node_count - 1);
+    scan_msg->range_min = 0.15;
+    scan_msg->range_max = max_distance;    //8.0;
+
+//    scan_msg->intensities.resize(node_count);
+//    scan_msg->ranges.resize(node_count);
+    bool reverse_data = (!inverted && reversed) || (inverted && !reversed);
+    bool set_angle_range = (angle_min != 0.0f) || (angle_max != 0.0f);
+    size_t start_index = 0, end_index = node_count;
+    if (set_angle_range) {
+      start_index =
+        static_cast<size_t>(ceil((angle_min - msg_angle_min) / scan_msg->angle_increment));
+      end_index =
+        static_cast<size_t>(ceil((angle_max - msg_angle_min) / scan_msg->angle_increment));
+
+      if (start_index < 0) {
+        start_index = 0;
+      }
+      if (end_index > node_count) {
+        end_index = node_count;
+      }
+    }
+    for (size_t i = start_index; i < end_index; i++) {
+      float read_value;
+      if (!reverse_data) {
+        read_value =
+          (float) nodes[i].dist_mm_q2 / 4.0f / 1000;
+      } else {
+        read_value =
+          (float) nodes[node_count - 1 - i].dist_mm_q2 / 4.0f / 1000;
+      }
+      if (read_value == 0.0) {
+        scan_msg->ranges.push_back(std::numeric_limits<float>::infinity());
+      } else {
+        scan_msg->ranges.push_back(read_value);
+      }
+      scan_msg->intensities.push_back(static_cast<float>(nodes[i].quality >> 2));
     }
 
-    bool stop_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
-                    std::shared_ptr<std_srvs::srv::Empty::Response> res)
-    {
-        (void)req;
-        (void)res;
-
-        if(!drv)
-            return false;
-
-        RCLCPP_DEBUG(this->get_logger(),"Stop motor");
-        drv->setMotorSpeed(0);
-        return true;
+    if (set_angle_range) {
+      scan_msg->angle_min = msg_angle_min + scan_msg->angle_increment * start_index;
+      scan_msg->angle_max = msg_angle_min + scan_msg->angle_increment * (end_index - 1);
+    } else {
+      scan_msg->angle_min = msg_angle_min;
+      scan_msg->angle_max = msg_angle_max;
     }
 
-    bool start_motor(const std::shared_ptr<std_srvs::srv::Empty::Request> req,
-                    std::shared_ptr<std_srvs::srv::Empty::Response> res)
-    {
-        (void)req;
-        (void)res;
+//    if (!reverse_data) {
+//      for (size_t i = 0; i < node_count; i++) {
+//        float read_value = (float) nodes[i].dist_mm_q2 / 4.0f / 1000;
+//        if (read_value == 0.0) {
+//          scan_msg->ranges[i] = std::numeric_limits<float>::infinity();
+//        } else {
+//          scan_msg->ranges[i] = read_value;
+//        }
+//        scan_msg->intensities[i] = (float) (nodes[i].quality >> 2);
+//      }
+//    } else {
+//      for (size_t i = 0; i < node_count; i++) {
+//        float read_value = (float)nodes[i].dist_mm_q2 / 4.0f / 1000;
+//        if (read_value == 0.0) {
+//          scan_msg->ranges[node_count - 1 - i] = std::numeric_limits<float>::infinity();
+//        } else {
+//          scan_msg->ranges[node_count - 1 - i] = read_value;
+//        }
+//        scan_msg->intensities[node_count - 1 - i] = (float) (nodes[i].quality >> 2);
+//      }
+//    }
 
-        if(!drv)
-           return false;
-        if(drv->isConnected())
+    pub->publish(*scan_msg);
+  }
+
+public:
+  int work_loop()
+  {
+    init_param();
+    int ver_major = SL_LIDAR_SDK_VERSION_MAJOR;
+    int ver_minor = SL_LIDAR_SDK_VERSION_MINOR;
+    int ver_patch = SL_LIDAR_SDK_VERSION_PATCH;
+    RCLCPP_INFO(
+      this->get_logger(), "SLLidar running on ROS2 package SLLidar.ROS2 SDK Version:" ROS2VERSION ", SLLIDAR SDK Version:%d.%d.%d", ver_major, ver_minor,
+      ver_patch);
+
+    sl_result op_result;
+
+    // create the driver instance
+    drv = *createLidarDriver();
+    IChannel * _channel;
+    if (channel_type == "tcp") {
+      _channel = *createTcpChannel(tcp_ip, tcp_port);
+    } else if (channel_type == "udp") {
+      _channel = *createUdpChannel(udp_ip, udp_port);
+    } else {
+      _channel = *createSerialPortChannel(serial_port, serial_baudrate);
+    }
+    if (SL_IS_FAIL((drv)->connect(_channel))) {
+      if (channel_type == "tcp") {
+        RCLCPP_ERROR(
+          this->get_logger(), "Error, cannot connect to the ip addr  %s with the tcp port %s.",
+          tcp_ip.c_str(), std::to_string(tcp_port).c_str());
+      } else if (channel_type == "udp") {
+        RCLCPP_ERROR(
+          this->get_logger(), "Error, cannot connect to the ip addr  %s with the udp port %s.",
+          udp_ip.c_str(), std::to_string(udp_port).c_str());
+      } else {
+        RCLCPP_ERROR(
+          this->get_logger(), "Error, cannot bind to the specified serial port %s.",
+          serial_port.c_str());
+      }
+      delete drv;
+      return -1;
+    }
+
+    // get sllidar device info
+    if (!getSLLIDARDeviceInfo(drv)) {
+      return -1;
+    }
+
+    // check health...
+    if (!checkSLLIDARHealth(drv)) {
+      return -1;
+    }
+
+    stop_motor_service = this->create_service<std_srvs::srv::Empty>(
+      "stop_motor",
+      std::bind(&SLlidarNode::stop_motor, this, std::placeholders::_1, std::placeholders::_2));
+    start_motor_service = this->create_service<std_srvs::srv::Empty>(
+      "start_motor",
+      std::bind(&SLlidarNode::start_motor, this, std::placeholders::_1, std::placeholders::_2));
+
+    drv->setMotorSpeed();
+
+    LidarScanMode current_scan_mode;
+    if (scan_mode.empty()) {
+      op_result = drv->startScan(
+        false /* not force scan */, true /* use typical scan mode */, 0,
+        &current_scan_mode);
+    } else {
+      std::vector<LidarScanMode> allSupportedScanModes;
+      op_result = drv->getAllSupportedScanModes(allSupportedScanModes);
+
+      if (SL_IS_OK(op_result)) {
+        sl_u16 selectedScanMode = sl_u16(-1);
+        for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin();
+          iter != allSupportedScanModes.end(); iter++)
         {
-            RCLCPP_DEBUG(this->get_logger(),"Start motor");
-            sl_result ans=drv->setMotorSpeed();
-            if (SL_IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
-                return false;
-            }
-        
-            ans=drv->startScan(0,1);
-            if (SL_IS_FAIL(ans)) {
-                RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
-            }
-        } else {
-            RCLCPP_INFO(this->get_logger(),"lost connection");
-            return false;
+          if (iter->scan_mode == scan_mode) {
+            selectedScanMode = iter->id;
+            break;
+          }
         }
 
-        return true;
+        if (selectedScanMode == sl_u16(-1)) {
+          RCLCPP_ERROR(
+            this->get_logger(), "scan mode `%s' is not supported by lidar, supported modes:",
+            scan_mode.c_str());
+          for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin();
+            iter != allSupportedScanModes.end(); iter++)
+          {
+            RCLCPP_ERROR(
+              this->get_logger(), "\t%s: max_distance: %.1f m, Point number: %.1fK", iter->scan_mode,
+              iter->max_distance, (1000 / iter->us_per_sample));
+          }
+          op_result = SL_RESULT_OPERATION_FAIL;
+        } else {
+          op_result = drv->startScanExpress(
+            false /* not force scan */, selectedScanMode, 0,
+            &current_scan_mode);
+        }
+      }
     }
 
-    static float getAngle(const sl_lidar_response_measurement_node_hq_t& node)
-    {
-        return node.angle_z_q14 * 90.f / 16384.f;
+    if (SL_IS_OK(op_result)) {
+      //default frequent is 10 hz (by motor pwm value),  current_scan_mode.us_per_sample is the number of scan point per us
+      int points_per_circle = (int)(1000 * 1000 / current_scan_mode.us_per_sample / scan_frequency);
+      angle_compensate_multiple = points_per_circle / 360.0 + 1;
+      if (angle_compensate_multiple < 1) {
+        angle_compensate_multiple = 1.0;
+      }
+      max_distance = (float)current_scan_mode.max_distance;
+      RCLCPP_INFO(
+        this->get_logger(), "current scan mode: %s, sample rate: %d Khz, max_distance: %.1f m, scan frequency:%.1f Hz, ",
+        current_scan_mode.scan_mode, (int)(1000 / current_scan_mode.us_per_sample + 0.5), max_distance,
+        scan_frequency);
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Can not start scan: %08x!", op_result);
     }
 
-    void publish_scan(rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr& pub,
-                  sl_lidar_response_measurement_node_hq_t *nodes,
-                  size_t node_count, rclcpp::Time start,
-                  double scan_time, bool inverted,
-                  float angle_min, float angle_max,
-                  float max_distance,
-                  std::string frame_id)
-    {
-        static int scan_count = 0;
-        auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
+    rclcpp::Time start_scan_time;
+    rclcpp::Time end_scan_time;
+    double scan_duration;
+    while (rclcpp::ok() && !need_exit) {
+      sl_lidar_response_measurement_node_hq_t nodes[8192];
+      size_t count = _countof(nodes);
 
-        scan_msg->header.stamp = start;
-        scan_msg->header.frame_id = frame_id;
-        scan_count++;
+      start_scan_time = this->now();
+      op_result = drv->grabScanDataHq(nodes, count);
+      end_scan_time = this->now();
+      scan_duration = (end_scan_time - start_scan_time).seconds();
 
-        bool reversed = (angle_max > angle_min);
-        if ( reversed ) {
-            scan_msg->angle_min =  M_PI - angle_max;
-            scan_msg->angle_max =  M_PI - angle_min;
-        } else {
-            scan_msg->angle_min =  M_PI - angle_min;
-            scan_msg->angle_max =  M_PI - angle_max;
-        }
-        scan_msg->angle_increment = (scan_msg->angle_max - scan_msg->angle_min) / (double)(node_count-1);
+      if (op_result == SL_RESULT_OK) {
+        op_result = drv->ascendScanData(nodes, count);
+        float data_angle_min = DEG2RAD(0.0f);
+        float data_angle_max = DEG2RAD(359.0f);
+        if (op_result == SL_RESULT_OK) {
+          if (angle_compensate) {
+            //const int angle_compensate_multiple = 1;
+            const int angle_compensate_nodes_count = 360 * angle_compensate_multiple;
+            int angle_compensate_offset = 0;
+            auto angle_compensate_nodes =
+              new sl_lidar_response_measurement_node_hq_t[angle_compensate_nodes_count];
+            memset(
+              angle_compensate_nodes, 0,
+              angle_compensate_nodes_count * sizeof(sl_lidar_response_measurement_node_hq_t));
 
-        scan_msg->scan_time = scan_time;
-        scan_msg->time_increment = scan_time / (double)(node_count-1);
-        scan_msg->range_min = 0.15;
-        scan_msg->range_max = max_distance;//8.0;
-
-        scan_msg->intensities.resize(node_count);
-        scan_msg->ranges.resize(node_count);
-        bool reverse_data = (!inverted && reversed) || (inverted && !reversed);
-        if (!reverse_data) {
-            for (size_t i = 0; i < node_count; i++) {
-                float read_value = (float) nodes[i].dist_mm_q2/4.0f/1000;
-                if (read_value == 0.0)
-                    scan_msg->ranges[i] = std::numeric_limits<float>::infinity();
-                else
-                    scan_msg->ranges[i] = read_value;
-                scan_msg->intensities[i] = (float) (nodes[i].quality >> 2);
-            }
-        } else {
-            for (size_t i = 0; i < node_count; i++) {
-                float read_value = (float)nodes[i].dist_mm_q2/4.0f/1000;
-                if (read_value == 0.0)
-                    scan_msg->ranges[node_count-1-i] = std::numeric_limits<float>::infinity();
-                else
-                    scan_msg->ranges[node_count-1-i] = read_value;
-                scan_msg->intensities[node_count-1-i] = (float) (nodes[i].quality >> 2);
-            }
-        }
-
-        pub->publish(*scan_msg);
-    }
-public:    
-    int work_loop()
-    {        
-        init_param();
-        int ver_major = SL_LIDAR_SDK_VERSION_MAJOR;
-        int ver_minor = SL_LIDAR_SDK_VERSION_MINOR;
-        int ver_patch = SL_LIDAR_SDK_VERSION_PATCH;
-        RCLCPP_INFO(this->get_logger(),"SLLidar running on ROS2 package SLLidar.ROS2 SDK Version:" ROS2VERSION ", SLLIDAR SDK Version:%d.%d.%d",ver_major,ver_minor,ver_patch);
-    
-        sl_result     op_result;
-
-        // create the driver instance
-        drv = *createLidarDriver();
-        IChannel* _channel;
-        if(channel_type == "tcp"){
-            _channel = *createTcpChannel(tcp_ip, tcp_port);
-        }
-        else if(channel_type == "udp"){
-            _channel = *createUdpChannel(udp_ip, udp_port);
-        }
-        else{
-            _channel = *createSerialPortChannel(serial_port, serial_baudrate);
-        }
-        if (SL_IS_FAIL((drv)->connect(_channel))) {
-            if(channel_type == "tcp"){
-                RCLCPP_ERROR(this->get_logger(),"Error, cannot connect to the ip addr  %s with the tcp port %s.",tcp_ip.c_str(),std::to_string(tcp_port).c_str());
-            }
-            else if(channel_type == "udp"){
-                RCLCPP_ERROR(this->get_logger(),"Error, cannot connect to the ip addr  %s with the udp port %s.",udp_ip.c_str(),std::to_string(udp_port).c_str());
-            }
-            else{
-                RCLCPP_ERROR(this->get_logger(),"Error, cannot bind to the specified serial port %s.",serial_port.c_str());            
-            }
-            delete drv;
-            return -1;
-        }
-        
-        // get sllidar device info
-        if (!getSLLIDARDeviceInfo(drv)) {
-            return -1;
-        }
-
-        // check health...
-        if (!checkSLLIDARHealth(drv)) {
-            return -1;
-        }
-
-        stop_motor_service = this->create_service<std_srvs::srv::Empty>("stop_motor",  
-                                std::bind(&SLlidarNode::stop_motor,this,std::placeholders::_1,std::placeholders::_2));
-        start_motor_service = this->create_service<std_srvs::srv::Empty>("start_motor", 
-                                std::bind(&SLlidarNode::start_motor,this,std::placeholders::_1,std::placeholders::_2));
-
-        drv->setMotorSpeed();
-
-        LidarScanMode current_scan_mode;
-        if (scan_mode.empty()) {
-            op_result = drv->startScan(false /* not force scan */, true /* use typical scan mode */, 0, &current_scan_mode);
-        } else {
-            std::vector<LidarScanMode> allSupportedScanModes;
-            op_result = drv->getAllSupportedScanModes(allSupportedScanModes);
-
-            if (SL_IS_OK(op_result)) {
-                sl_u16 selectedScanMode = sl_u16(-1);
-                for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
-                    if (iter->scan_mode == scan_mode) {
-                        selectedScanMode = iter->id;
-                        break;
-                    }
+            size_t i = 0, j = 0;
+            for ( ; i < count; i++) {
+              if (nodes[i].dist_mm_q2 != 0) {
+                float angle = getAngle(nodes[i]);
+                int angle_value = (int)(angle * angle_compensate_multiple);
+                if ((angle_value - angle_compensate_offset) < 0) {
+                  angle_compensate_offset = angle_value;
                 }
-
-                if (selectedScanMode == sl_u16(-1)) {
-                    RCLCPP_ERROR(this->get_logger(),"scan mode `%s' is not supported by lidar, supported modes:", scan_mode.c_str());
-                    for (std::vector<LidarScanMode>::iterator iter = allSupportedScanModes.begin(); iter != allSupportedScanModes.end(); iter++) {
-                        RCLCPP_ERROR(this->get_logger(),"\t%s: max_distance: %.1f m, Point number: %.1fK",  iter->scan_mode,
-                                iter->max_distance, (1000/iter->us_per_sample));
-                    }
-                    op_result = SL_RESULT_OPERATION_FAIL;
-                } else {
-                    op_result = drv->startScanExpress(false /* not force scan */, selectedScanMode, 0, &current_scan_mode);
+                for (j = 0; j < angle_compensate_multiple; j++) {
+                  int angle_compensate_nodes_index = angle_value - angle_compensate_offset + j;
+                  if (angle_compensate_nodes_index >= angle_compensate_nodes_count) {
+                    angle_compensate_nodes_index = angle_compensate_nodes_count - 1;
+                  }
+                  angle_compensate_nodes[angle_compensate_nodes_index] = nodes[i];
                 }
-            }
-        }
-
-        if(SL_IS_OK(op_result))
-        {
-            //default frequent is 10 hz (by motor pwm value),  current_scan_mode.us_per_sample is the number of scan point per us
-            int points_per_circle = (int)(1000*1000/current_scan_mode.us_per_sample/scan_frequency);
-            angle_compensate_multiple = points_per_circle/360.0  + 1;
-            if(angle_compensate_multiple < 1) 
-            angle_compensate_multiple = 1.0;
-            max_distance = (float)current_scan_mode.max_distance;
-            RCLCPP_INFO(this->get_logger(),"current scan mode: %s, sample rate: %d Khz, max_distance: %.1f m, scan frequency:%.1f Hz, ", 
-                                current_scan_mode.scan_mode,(int)(1000/current_scan_mode.us_per_sample+0.5),max_distance, scan_frequency);
-        }
-        else
-        {
-            RCLCPP_ERROR(this->get_logger(),"Can not start scan: %08x!", op_result);
-        }
-
-        rclcpp::Time start_scan_time;
-        rclcpp::Time end_scan_time;
-        double scan_duration;
-        while (rclcpp::ok() && !need_exit) {
-            sl_lidar_response_measurement_node_hq_t nodes[8192];
-            size_t   count = _countof(nodes);
-
-            start_scan_time = this->now();
-            op_result = drv->grabScanDataHq(nodes, count);
-            end_scan_time = this->now();
-            scan_duration = (end_scan_time - start_scan_time).seconds();
-
-            if (op_result == SL_RESULT_OK) {
-                op_result = drv->ascendScanData(nodes, count);
-                float angle_min = DEG2RAD(0.0f);
-                float angle_max = DEG2RAD(359.0f);
-                if (op_result == SL_RESULT_OK) {
-                    if (angle_compensate) {
-                        //const int angle_compensate_multiple = 1;
-                        const int angle_compensate_nodes_count = 360*angle_compensate_multiple;
-                        int angle_compensate_offset = 0;
-                        auto angle_compensate_nodes = new sl_lidar_response_measurement_node_hq_t[angle_compensate_nodes_count];
-                        memset(angle_compensate_nodes, 0, angle_compensate_nodes_count*sizeof(sl_lidar_response_measurement_node_hq_t));
-
-                        size_t i = 0, j = 0;
-                        for( ; i < count; i++ ) {
-                            if (nodes[i].dist_mm_q2 != 0) {
-                                float angle = getAngle(nodes[i]);
-                                int angle_value = (int)(angle * angle_compensate_multiple);
-                                if ((angle_value - angle_compensate_offset) < 0) angle_compensate_offset = angle_value;
-                                for (j = 0; j < angle_compensate_multiple; j++) {
-                                    int angle_compensate_nodes_index = angle_value-angle_compensate_offset + j;
-                                    if(angle_compensate_nodes_index >= angle_compensate_nodes_count)
-                                        angle_compensate_nodes_index = angle_compensate_nodes_count - 1;
-                                    angle_compensate_nodes[angle_compensate_nodes_index] = nodes[i];
-                                }
-                            }
-                        }
-    
-                        publish_scan(scan_pub, angle_compensate_nodes, angle_compensate_nodes_count,
-                                start_scan_time, scan_duration, inverted,
-                                angle_min, angle_max, max_distance,
-                                frame_id);
-
-                        if (angle_compensate_nodes) {
-                            delete[] angle_compensate_nodes;
-                            angle_compensate_nodes = nullptr;
-                        }
-                    } else {
-                        int start_node = 0, end_node = 0;
-                        int i = 0;
-                        // find the first valid node and last valid node
-                        while (nodes[i++].dist_mm_q2 == 0);
-                        start_node = i-1;
-                        i = count -1;
-                        while (nodes[i--].dist_mm_q2 == 0);
-                        end_node = i+1;
-
-                        angle_min = DEG2RAD(getAngle(nodes[start_node]));
-                        angle_max = DEG2RAD(getAngle(nodes[end_node]));
-
-                        publish_scan(scan_pub, &nodes[start_node], end_node-start_node +1,
-                                start_scan_time, scan_duration, inverted,
-                                angle_min, angle_max, max_distance,
-                                frame_id);
-                    }
-                } else if (op_result == SL_RESULT_OPERATION_FAIL) {
-                    // All the data is invalid, just publish them
-                    float angle_min = DEG2RAD(0.0f);
-                    float angle_max = DEG2RAD(359.0f);
-                    publish_scan(scan_pub, nodes, count,
-                                start_scan_time, scan_duration, inverted,
-                                angle_min, angle_max, max_distance,
-                                frame_id);
-                }
+              }
             }
 
-            rclcpp::spin_some(shared_from_this());
+            publish_scan(
+              scan_pub, angle_compensate_nodes, angle_compensate_nodes_count,
+              start_scan_time, scan_duration, inverted,
+              data_angle_min, data_angle_max, max_distance,
+              frame_id, angle_min, angle_max);
+
+            if (angle_compensate_nodes) {
+              delete[] angle_compensate_nodes;
+              angle_compensate_nodes = nullptr;
+            }
+          } else {
+            int start_node = 0, end_node = 0;
+            int i = 0;
+            // find the first valid node and last valid node
+            while (nodes[i++].dist_mm_q2 == 0) {}
+            start_node = i - 1;
+            i = count - 1;
+            while (nodes[i--].dist_mm_q2 == 0) {}
+            end_node = i + 1;
+
+            data_angle_min = DEG2RAD(getAngle(nodes[start_node]));
+            data_angle_max = DEG2RAD(getAngle(nodes[end_node]));
+
+            publish_scan(
+              scan_pub, &nodes[start_node], end_node - start_node + 1,
+              start_scan_time, scan_duration, inverted,
+              data_angle_min, data_angle_max, max_distance,
+              frame_id, angle_min, angle_max);
+          }
+        } else if (op_result == SL_RESULT_OPERATION_FAIL) {
+          // All the data is invalid, just publish them
+          float data_angle_min = DEG2RAD(0.0f);
+          float data_angle_max = DEG2RAD(359.0f);
+          publish_scan(
+            scan_pub, nodes, count,
+            start_scan_time, scan_duration, inverted,
+            data_angle_min, data_angle_max, max_distance,
+            frame_id, angle_min, angle_max);
         }
+      }
 
-        // done!
-        drv->setMotorSpeed(0);
-        drv->stop();
-        RCLCPP_INFO(this->get_logger(),"Stop motor");
-
-        return 0;
+      rclcpp::spin_some(shared_from_this());
     }
 
+    // done!
+    drv->setMotorSpeed(0);
+    drv->stop();
+    RCLCPP_INFO(this->get_logger(), "Stop motor");
 
-  private:
-    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
+    return 0;
+  }
 
-    std::string channel_type;
-    std::string tcp_ip;
-    std::string udp_ip;
-    std::string serial_port;
-    int tcp_port = 20108;
-    int udp_port = 8089;
-    int serial_baudrate = 115200;
-    std::string frame_id;
-    bool inverted = false;
-    bool angle_compensate = true;
-    float max_distance = 8.0;
-    size_t angle_compensate_multiple = 1;//it stand of angle compensate at per 1 degree
-    std::string scan_mode;
-    float scan_frequency;
+private:
+  rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_pub;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr start_motor_service;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_motor_service;
 
-    ILidarDriver * drv;    
+  std::string channel_type;
+  std::string tcp_ip;
+  std::string udp_ip;
+  std::string serial_port;
+  int tcp_port = 20108;
+  int udp_port = 8089;
+  int serial_baudrate = 115200;
+  std::string frame_id;
+  bool inverted = false;
+  bool angle_compensate = true;
+  float max_distance = 8.0;
+  size_t angle_compensate_multiple = 1;  //it stand of angle compensate at per 1 degree
+  std::string scan_mode;
+  float scan_frequency;
+  float angle_min, angle_max;
+
+  ILidarDriver * drv;
 };
 
 void ExitHandler(int sig)
 {
-    (void)sig;
-    need_exit = true;
+  (void)sig;
+  need_exit = true;
 }
 
 
 int main(int argc, char * argv[])
 {
-  rclcpp::init(argc, argv);  
+  rclcpp::init(argc, argv);
   auto sllidar_node = std::make_shared<SLlidarNode>();
-  signal(SIGINT,ExitHandler);
+  signal(SIGINT, ExitHandler);
   int ret = sllidar_node->work_loop();
   rclcpp::shutdown();
   return ret;
 }
-
