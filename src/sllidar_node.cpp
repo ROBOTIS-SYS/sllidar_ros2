@@ -241,7 +241,7 @@ private:
 
     scan_msg->scan_time = scan_time;
     scan_msg->time_increment = scan_time / (double)(node_count - 1);
-    scan_msg->range_min = 0.15;
+    scan_msg->range_min = 0.05;   // 스펙시트에 맞게 변경 0.15 -> 0.05
     scan_msg->range_max = max_distance;    //8.0;
 
 //    scan_msg->intensities.resize(node_count);
