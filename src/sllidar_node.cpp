@@ -83,6 +83,7 @@ private:
     this->declare_parameter("scan_frequency");
     this->declare_parameter("angle_min");
     this->declare_parameter("angle_max");
+    this->declare_parameter("scan_rate");
 
     this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
     this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7");
@@ -102,6 +103,9 @@ private:
     }
     this->get_parameter_or<float>("angle_min", angle_min, 0.0);
     this->get_parameter_or<float>("angle_max", angle_max, 0.0);
+    float scan_rate;
+    this->get_parameter_or<float>("scan_rate", scan_rate, 10.0);
+    motor_rpm = static_cast<sl_u16>(scan_rate * 60);
   }
 
   bool getSLLIDARDeviceInfo(ILidarDriver * drv)
@@ -188,7 +192,7 @@ private:
     }
     if (drv->isConnected()) {
       RCLCPP_DEBUG(this->get_logger(), "Start motor");
-      sl_result ans = drv->setMotorSpeed();
+      sl_result ans = drv->setMotorSpeed(motor_rpm);
       if (SL_IS_FAIL(ans)) {
         RCLCPP_WARN(this->get_logger(), "Failed to start motor: %08x", ans);
         return false;
@@ -370,7 +374,7 @@ public:
       "start_motor",
       std::bind(&SLlidarNode::start_motor, this, std::placeholders::_1, std::placeholders::_2));
 
-    drv->setMotorSpeed();
+    drv->setMotorSpeed(motor_rpm);
 
     LidarScanMode current_scan_mode;
     if (scan_mode.empty()) {
@@ -545,6 +549,7 @@ private:
   std::string scan_mode;
   float scan_frequency;
   float angle_min, angle_max;
+  sl_u16 motor_rpm;
 
   ILidarDriver * drv;
 };
