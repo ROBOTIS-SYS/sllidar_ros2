@@ -376,7 +376,6 @@ public:
     RCLCPP_INFO_STREAM(get_logger(), "Motor RPM : " << motor_rpm);
     if (drv->setMotorSpeed(motor_rpm)) {
       RCLCPP_ERROR_STREAM(get_logger(), "Failed to set motor RPM : " << motor_rpm);
-    } else {
       drv->setMotorSpeed();
     }
 
