@@ -103,9 +103,7 @@ private:
     }
     this->get_parameter_or<float>("angle_min", angle_min, 0.0);
     this->get_parameter_or<float>("angle_max", angle_max, 0.0);
-    float scan_rate;
-    this->get_parameter_or<float>("scan_rate", scan_rate, 10.0);
-    motor_rpm = static_cast<sl_u16>(scan_rate * 60);
+    motor_rpm = static_cast<sl_u16>(scan_frequency * 60);
   }
 
   bool getSLLIDARDeviceInfo(ILidarDriver * drv)
@@ -374,7 +372,13 @@ public:
       "start_motor",
       std::bind(&SLlidarNode::start_motor, this, std::placeholders::_1, std::placeholders::_2));
 
-    drv->setMotorSpeed(motor_rpm);
+    // Motor RPM 설정
+    RCLCPP_INFO_STREAM(get_logger(), "Motor RPM : " << motor_rpm);
+    if (drv->setMotorSpeed(motor_rpm)) {
+      RCLCPP_ERROR_STREAM(get_logger(), "Failed to set motor RPM : " << motor_rpm);
+    } else {
+      drv->setMotorSpeed();
+    }
 
     LidarScanMode current_scan_mode;
     if (scan_mode.empty()) {
