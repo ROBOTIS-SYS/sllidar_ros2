@@ -737,6 +737,8 @@ public:
   {
     Result<nullptr_t> ans = SL_RESULT_OK;
 
+    std::cout << "Set Motor speed : " << speed << std::endl;
+
     // default 속도인 경우 요구속도와 지원하는 제어모드를 받아옴
     if (speed == DEFAULT_MOTOR_SPEED) {
       sl_lidar_response_desired_rot_speed_t desired_speed;
@@ -765,7 +767,10 @@ public:
           _sendCommand(
           SL_LIDAR_CMD_HQ_MOTOR_SPEED_CTRL, (const sl_u8 *)&motor_rpm,
           sizeof(motor_rpm));
-        if (!ans) {return ans;}
+        if (!ans) {
+          _motor_speed = speed;
+          return ans;
+        }
         break;
     }
 
