@@ -83,7 +83,7 @@ private:
     this->declare_parameter("scan_frequency");
     this->declare_parameter("angle_min");
     this->declare_parameter("angle_max");
-    this->declare_parameter("scan_rate");
+//    this->declare_parameter("scan_rate");
 
     this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
     this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7");
@@ -415,6 +415,9 @@ public:
           op_result = drv->startScanExpress(
             false /* not force scan */, selectedScanMode, 0,
             &current_scan_mode);
+
+          // 모터 속도 원상복구 되는 현상을 막기 위해 다시 모터 속도 세팅
+          drv->setMotorSpeed(motor_rpm);
         }
       }
     }
