@@ -83,6 +83,7 @@ private:
     this->declare_parameter("scan_frequency");
     this->declare_parameter("angle_min");
     this->declare_parameter("angle_max");
+//    this->declare_parameter("scan_rate");
 
     this->get_parameter_or<std::string>("channel_type", channel_type, "serial");
     this->get_parameter_or<std::string>("tcp_ip", tcp_ip, "192.168.0.7");
@@ -98,7 +99,7 @@ private:
     if (channel_type == "udp") {
       this->get_parameter_or<float>("scan_frequency", scan_frequency, 20.0);
     } else {
-      this->get_parameter_or<float>("scan_frequency", scan_frequency, 15.0);
+      this->get_parameter_or<float>("scan_frequency", scan_frequency, 10.0);
     }
     this->get_parameter_or<float>("angle_min", angle_min, 0.0);
     this->get_parameter_or<float>("angle_max", angle_max, 0.0);
@@ -199,6 +200,8 @@ private:
       if (SL_IS_FAIL(ans)) {
         RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
       }
+      // 모터 속도 원상복구 되는 현상을 막기 위해 다시 모터 속도 세팅
+      drv->setMotorSpeed(motor_rpm);
     } else {
       RCLCPP_INFO(this->get_logger(), "lost connection");
       return false;
@@ -224,7 +227,8 @@ private:
     static int scan_count = 0;
     auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
 
-    scan_msg->header.stamp = start;
+//    scan_msg->header.stamp = start;
+    scan_msg->header.stamp = this->get_clock()->now();
     scan_msg->header.frame_id = frame_id;
     scan_count++;
 
