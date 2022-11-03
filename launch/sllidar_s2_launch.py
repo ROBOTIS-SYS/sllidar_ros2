@@ -17,6 +17,7 @@ def generate_launch_description():
     inverted = LaunchConfiguration('inverted', default='false')
     angle_compensate = LaunchConfiguration('angle_compensate', default='true')
     scan_mode = LaunchConfiguration('scan_mode', default='DenseBoost')
+    scan_frequency = LaunchConfiguration('scan_frequency', default='10.0')
 
     return LaunchDescription([
 
@@ -50,6 +51,11 @@ def generate_launch_description():
             default_value=scan_mode,
             description='Specifying scan mode of lidar'),
 
+        DeclareLaunchArgument(
+            'scan_frequency',
+            default_value=scan_frequency,
+            description='Specifying scan frequency of lidar'),
+
         Node(
             package='sllidar_ros2',
             node_executable='sllidar_node',
@@ -59,6 +65,7 @@ def generate_launch_description():
                          'frame_id': frame_id,
                          'inverted': inverted, 
                          'angle_compensate': angle_compensate, 
+                         'scan_frequency': scan_frequency,
                          'scan_mode': scan_mode}],
             output='screen'),
     ])
