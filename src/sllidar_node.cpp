@@ -173,7 +173,7 @@ private:
       return false;
     }
 
-    RCLCPP_DEBUG(this->get_logger(), "Stop motor");
+    RCLCPP_DEBUG(this->get_logger(), "Stop motor from stop_motor service");
     drv->setMotorSpeed(0);
     return true;
   }
@@ -533,7 +533,7 @@ public:
     // done!
     drv->setMotorSpeed(0);
     drv->stop();
-    RCLCPP_INFO(this->get_logger(), "Stop motor");
+    RCLCPP_INFO(this->get_logger(), "Stop motor at the end of work loop");
 
     return 0;
   }
